@@ -1,21 +1,19 @@
 {
   "name": "odds-arbitrage",
   "version": "1.0.0",
-  "description": "",
+  "description": "Sports odds arbitrage calculator",
   "main": "index.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/GildRios/odds-arbitrage.git"
   },
-  "keywords": [],
-  "author": "",
+  "author": "Andres",
   "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/GildRios/odds-arbitrage/issues"
-  },
-  "homepage": "https://github.com/GildRios/odds-arbitrage#readme"
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  }
 }
