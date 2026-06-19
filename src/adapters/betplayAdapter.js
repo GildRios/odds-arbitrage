@@ -1,15 +1,21 @@
 import { normalizeOddsData } from "../models/opportunity.js";
 
+export function adaptBetplayEvent(event) {
+  const { homeName, awayName, start, id, path } = event.event;
 
-export function adaptBetplayEvent(liveEvent) {
-  const { homeName, awayName, start } = liveEvent.event;
-
-  if (!liveEvent.mainBetOffer?.outcomes) {
+  if (path?.some(p => p.termKey === "esports_football")) {
     return null;
   }
 
-  const outcomes = liveEvent.mainBetOffer.outcomes;
+  const betOffer = event.betOffers?.find(
+    bo => bo.criterion?.label === "Resultado Final"
+  );
 
+  if (!betOffer?.outcomes) {
+    return null;
+  }
+
+  const outcomes = betOffer.outcomes;
   const local = outcomes.find(o => o.label === "1");
   const empate = outcomes.find(o => o.label === "X");
   const visitante = outcomes.find(o => o.label === "2");
@@ -18,8 +24,7 @@ export function adaptBetplayEvent(liveEvent) {
     return null;
   }
 
-
- return normalizeOddsData({
+  return normalizeOddsData({
     match: `${homeName} vs ${awayName}`,
     date: start.split("T")[0],
     house: "Betplay",
@@ -28,7 +33,6 @@ export function adaptBetplayEvent(liveEvent) {
       empate: empate.odds / 1000,
       visitante: visitante.odds / 1000,
     },
-    link: "https://betplay.com.co",
+    link: `https://betplay.com.co/deportes#/event/${id}`,
   });
-
 }
