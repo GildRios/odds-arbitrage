@@ -21,9 +21,8 @@ export async function findArbitrageOpportunities(totalStake) {
   for (const matchKey in groupedOdds) {
     const oddsArray = groupedOdds[matchKey];
 
-    // solo tiene sentido comparar si hay más de una casa
     if (oddsArray.length < 2) continue;
-    console.log(matchKey, oddsArray.length);
+
     const bestLocal = Math.max(...oddsArray.map(o => o.odds.local));
     const bestDraw = Math.max(...oddsArray.map(o => o.odds.empate));
     const bestAway = Math.max(...oddsArray.map(o => o.odds.visitante));
