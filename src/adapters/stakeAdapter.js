@@ -7,6 +7,10 @@ export function adaptStakeEvent(event) {
 
   const { teams: { home: homeTeam, away: awayTeam }, date_start: eventDate } = event;
 
+  if (event.is_live || new Date(eventDate) < new Date()) {
+    return null;
+  }
+
   if (!event.main_odds.main) {
     return null;
   }

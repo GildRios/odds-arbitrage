@@ -1,7 +1,11 @@
 import { normalizeOddsData } from "../models/opportunity.js";
 
 export function adaptBetplayEvent(event) {
-  const { homeName, awayName, start, id, path } = event.event;
+  const { homeName, awayName, start, id, path, state } = event.event;
+
+  if (state !== "NOT_STARTED") {
+    return null;
+  }
 
   if (path?.some(p => p.termKey === "esports_football")) {
     return null;
