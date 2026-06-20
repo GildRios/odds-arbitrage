@@ -1,6 +1,7 @@
 import { adaptBetplayEvent } from "../adapters/betplayAdapter.js";
 import { adaptStakeEvent } from "../adapters/stakeAdapter.js";
 import { parseWplayDOM } from "../adapters/wplayAdapter.js";
+import { adaptZambaEvent } from "../adapters/zambaAdapter.js";
 import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 chromium.use(stealth());
@@ -93,6 +94,66 @@ export async function getStakeOdds() {
   return allEvents
     .map(event => adaptStakeEvent(event))
     .filter(odd => odd !== null);
+}
+
+const ZAMBA_ENDPOINT = "https://online-nio3-sportsbook-zamba.orenes.tech/offermanager/graphql";
+const ZAMBA_HEADERS = {
+  "Content-Type": "application/json",
+  "X-API-Key": "h640tsLa4fUxEucHUBr3v88mEd",
+  "x-tenant": "031a9bbf-eaa5-4ae3-9668-8a01db9464a3",
+};
+const ZAMBA_TENANT = "031a9bbf-eaa5-4ae3-9668-8a01db9464a3";
+
+const ZAMBA_QUERY = `
+  query ($after: String) {
+    events(
+      filter: {
+        tenantId: "${ZAMBA_TENANT}"
+        status: Prematch
+        types: [Fixture]
+        ended: false
+        isOffered: true
+        sportKeys: [1]
+      }
+      first: 100
+      after: $after
+    ) {
+      edges {
+        node {
+          ... on Fixture {
+            eventId
+            utcStartDate
+            hasEnded
+            isLive
+            offerActive
+            competitors { homeAway competitorName }
+            markets {
+              marketDefaultName
+              selections { selectionDefaultName price status }
+            }
+          }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+export async function getZambaOdds() {
+  const allNodes = [];
+  let cursor = null;
+
+  do {
+    const body = JSON.stringify({ query: ZAMBA_QUERY, variables: { after: cursor } });
+    const data = await fetch(ZAMBA_ENDPOINT, { method: "POST", headers: ZAMBA_HEADERS, body })
+      .then(r => r.json());
+    const eventsPage = data?.data?.events;
+    if (!eventsPage) break;
+    allNodes.push(...eventsPage.edges.map(e => e.node));
+    cursor = eventsPage.pageInfo.hasNextPage ? eventsPage.pageInfo.endCursor : null;
+  } while (cursor);
+
+  return allNodes.map(adaptZambaEvent).filter(Boolean);
 }
 
 export async function getWplayOdds() {
