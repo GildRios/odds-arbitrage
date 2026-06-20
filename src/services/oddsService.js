@@ -5,9 +5,7 @@ import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 chromium.use(stealth());
 
-const KAMBI_BASE = "https://us.offering-api.kambicdn.com/offering/v2018/betplay";
 const KAMBI_QS = "?lang=es_CO&market=CO&client_id=200&channel_id=1";
-const BETPLAY_ALL_URL = `${KAMBI_BASE}/listView/football/all/all/all/matches.json${KAMBI_QS}`;
 
 const STAKE_BASE_URL = "https://pre-115o-sp.websbkt.com/cache/115/es/co/America-Havana/events-by-path.json?path=football&hidenseek=d6d9299bb73c3d6d6cb879ec1d912306d51b95a1";
 const STAKE_HEADERS = {
@@ -15,45 +13,40 @@ const STAKE_HEADERS = {
   "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 };
 
+function kambiBase(client) {
+  return `https://us.offering-api.kambicdn.com/offering/v2018/${client}`;
+}
+
 function extractCompetitionPaths(events) {
   const paths = new Set();
   events.forEach(e => {
     const path = e.event?.path ?? [];
-    // path[0] = sport, path[1] = region or competition, path[2] = competition (optional)
     const level1 = path[1]?.termKey;
     const level2 = path[2]?.termKey;
     if (!level1 || level1.startsWith("esports")) return;
-    // Build the URL segment: region/competition or just competition
     paths.add(level2 ? `${level1}/${level2}` : level1);
   });
   return [...paths];
 }
 
-function buildKambiCompetitionUrl(compPath) {
-  // 2-level path (e.g. world_cup_2026): needs /all/all/matches.json
-  // 3-level path (e.g. brazil/brasileirao): needs /all/matches.json
-  const segments = compPath.split("/").length === 1
-    ? `${compPath}/all/all`
-    : `${compPath}/all`;
-  return `${KAMBI_BASE}/listView/football/${segments}/matches.json${KAMBI_QS}`;
-}
-
-export async function getBetplayOdds() {
-  // Step 1: fetch the aggregate view to discover active competitions
-  const aggregateData = await fetch(BETPLAY_ALL_URL).then(r => r.json());
+async function getKambiOdds(client, house) {
+  const base = kambiBase(client);
+  const allUrl = `${base}/listView/football/all/all/all/matches.json${KAMBI_QS}`;
+  const aggregateData = await fetch(allUrl).then(r => r.json());
   const competitionPaths = extractCompetitionPaths(aggregateData.events ?? []);
 
-  // Step 2: fetch each competition individually (gives DAILY/MONTHLY coverage)
   const competitionPages = await Promise.all(
-    competitionPaths.map(path =>
-      fetch(buildKambiCompetitionUrl(path))
+    competitionPaths.map(compPath => {
+      const segments = compPath.split("/").length === 1
+        ? `${compPath}/all/all`
+        : `${compPath}/all`;
+      return fetch(`${base}/listView/football/${segments}/matches.json${KAMBI_QS}`)
         .then(r => r.json())
         .then(data => data.events ?? [])
-        .catch(() => [])
-    )
+        .catch(() => []);
+    })
   );
 
-  // Step 3: deduplicate by event id and adapt
   const seen = new Set();
   const allEvents = competitionPages.flat().filter(event => {
     if (seen.has(event.event?.id)) return false;
@@ -62,8 +55,16 @@ export async function getBetplayOdds() {
   });
 
   return allEvents
-    .map(event => adaptBetplayEvent(event))
+    .map(event => adaptBetplayEvent(event, house))
     .filter(odd => odd !== null);
+}
+
+export async function getBetplayOdds() {
+  return getKambiOdds("betplay", "Betplay");
+}
+
+export async function getRushbetOdds() {
+  return getKambiOdds("rsico", "Rushbet");
 }
 
 export async function getStakeOdds() {

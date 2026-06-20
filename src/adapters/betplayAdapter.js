@@ -1,6 +1,6 @@
 import { normalizeOddsData } from "../models/opportunity.js";
 
-export function adaptBetplayEvent(event) {
+export function adaptBetplayEvent(event, house = "Betplay") {
   const { homeName, awayName, start, id, path, state } = event.event;
 
   if (state !== "NOT_STARTED") {
@@ -31,12 +31,14 @@ export function adaptBetplayEvent(event) {
   return normalizeOddsData({
     match: `${homeName} vs ${awayName}`,
     date: start.split("T")[0],
-    house: "Betplay",
+    house,
     odds: {
       local: local.odds / 1000,
       empate: empate.odds / 1000,
       visitante: visitante.odds / 1000,
     },
-    link: `https://betplay.com.co/deportes#/event/${id}`,
+    link: house === "Rushbet"
+      ? `https://rushbet.co/?page=sportsbook#/event/${id}`
+      : `https://betplay.com.co/deportes#/event/${id}`,
   });
 }
