@@ -5,6 +5,7 @@ import { adaptZambaEvent } from "../adapters/zambaAdapter.js";
 import { parseLuckiaDOM } from "../adapters/luckiaAdapter.js";
 import { adaptCodereEvent } from "../adapters/codereAdapter.js";
 import { adaptRivaloFixture } from "../adapters/rivaloAdapter.js";
+import { adaptBetssonEvent } from "../adapters/betssonAdapter.js";
 import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 chromium.use(stealth());
@@ -258,6 +259,49 @@ export async function getLuckiaOdds() {
   } finally {
     await browser.close();
   }
+}
+
+const BETSSON_URL = "https://www.betsson.co/api/sb/v1/events?categoryId=1";
+const BETSSON_HEADERS = {
+  "correlationid": "betsson-odds-fetch",
+  "x-obg-channel": "Web",
+  "x-sb-device-type": "Desktop",
+  "x-sb-type": "b2b",
+  "brandid": "6a6d80b9-16ac-4387-a413-244d93a74deb",
+  "x-sb-jurisdiction": "Coljuegos",
+  "x-sb-content-id": "2d543995-acff-41c1-bc73-9ec46bd70602",
+  "x-sb-segment-id": "1a68008c-4da6-4f77-acbc-0614cb030d7d",
+  "x-sb-currency-code": "COP",
+  "x-sb-static-context-id": "stc--55774027",
+  "x-sb-user-context-id": "stc--55774027",
+  "x-sb-language-code": "co",
+  "x-sb-channel": "Web",
+  "marketcode": "co",
+  "sessiontoken": "ew0KICAiYWxnIjogIkhTMjU2IiwNCiAgInR5cCI6ICJKV1QiDQp9.ew0KICAianVyaXNkaWN0aW9uIjogIlVua25vd24iLA0KICAidXNlcklkIjogIjExMTExMTExLTExMTEtMTExMS0xMTExLTExMTExMTExMTExMSIsDQogICJsb2dpblNlc3Npb25JZCI6ICIxMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiDQp9.yuBO_qNKJHtbCWK3z04cEqU59EKU8pZb2kXHhZ7IeuI",
+  "x-sb-country-code": "CO",
+  "x-sb-identifier": "EVENTS_REQUEST",
+  "x-obg-device": "Desktop",
+  "accept": "application/json",
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/149.0.0.0 Safari/537.36",
+  "Referer": "https://www.betsson.co/apuestas-deportivas",
+};
+
+export async function getBetssonOdds() {
+  const first = await fetch(BETSSON_URL, { headers: BETSSON_HEADERS }).then(r => r.json());
+  const totalPages = first.totalPages ?? 1;
+  const firstEvents = first.events ?? [];
+
+  const remaining = await Promise.all(
+    Array.from({ length: totalPages - 1 }, (_, i) =>
+      fetch(`${BETSSON_URL}&pageNumber=${i + 2}`, { headers: BETSSON_HEADERS })
+        .then(r => r.json())
+        .then(d => d.events ?? [])
+        .catch(() => [])
+    )
+  );
+
+  const allEvents = [...firstEvents, ...remaining.flat()];
+  return allEvents.map(adaptBetssonEvent).filter(Boolean);
 }
 
 export async function getRivaloOdds() {

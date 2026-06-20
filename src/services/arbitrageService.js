@@ -1,4 +1,4 @@
-import { getBetplayOdds, getRushbetOdds, getStakeOdds, getWplayOdds, getZambaOdds, getLuckiaOdds, getCodereOdds, getRivaloOdds } from "./oddsService.js";
+import { getBetplayOdds, getRushbetOdds, getStakeOdds, getWplayOdds, getZambaOdds, getLuckiaOdds, getCodereOdds, getRivaloOdds, getBetssonOdds } from "./oddsService.js";
 import { hasArbitrage, calculateStakeDistribution } from "../utils/calculator.js";
 
 function groupByMatchKey(allOdds) {
@@ -13,10 +13,10 @@ function groupByMatchKey(allOdds) {
 }
 
 export async function findArbitrageOpportunities(totalStake) {
-  const [betplayOdds, rushbetOdds, stakeOdds, wplayOdds, zambaOdds, luckiaOdds, codereOdds, rivaloOdds] = await Promise.all([
-    getBetplayOdds(), getRushbetOdds(), getStakeOdds(), getWplayOdds(), getZambaOdds(), getLuckiaOdds(), getCodereOdds(), getRivaloOdds(),
+  const [betplayOdds, rushbetOdds, stakeOdds, wplayOdds, zambaOdds, luckiaOdds, codereOdds, rivaloOdds, betssonOdds] = await Promise.all([
+    getBetplayOdds(), getRushbetOdds(), getStakeOdds(), getWplayOdds(), getZambaOdds(), getLuckiaOdds(), getCodereOdds(), getRivaloOdds(), getBetssonOdds(),
   ]);
-  const allOdds = [...betplayOdds, ...rushbetOdds, ...stakeOdds, ...wplayOdds, ...zambaOdds, ...luckiaOdds, ...codereOdds, ...rivaloOdds];
+  const allOdds = [...betplayOdds, ...rushbetOdds, ...stakeOdds, ...wplayOdds, ...zambaOdds, ...luckiaOdds, ...codereOdds, ...rivaloOdds, ...betssonOdds];
   const groupedOdds = groupByMatchKey(allOdds);
   const opportunities = [];
 
