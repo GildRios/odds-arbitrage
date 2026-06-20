@@ -3,6 +3,7 @@ import { adaptStakeEvent } from "../adapters/stakeAdapter.js";
 import { parseWplayDOM } from "../adapters/wplayAdapter.js";
 import { adaptZambaEvent } from "../adapters/zambaAdapter.js";
 import { parseLuckiaDOM } from "../adapters/luckiaAdapter.js";
+import { adaptCodereEvent } from "../adapters/codereAdapter.js";
 import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 chromium.use(stealth());
@@ -155,6 +156,52 @@ export async function getZambaOdds() {
   } while (cursor);
 
   return allNodes.map(adaptZambaEvent).filter(Boolean);
+}
+
+const CODERE_NAV = "https://m.codere.com.co/NavigationService/Home/GetCountriesByDate";
+const CODERE_SBS = "https://codere-sbs-co.azurewebsites.net/leagues";
+const CODERE_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+  "Referer": "https://m.codere.com.co/deportesCol/",
+};
+
+export async function getCodereOdds() {
+  const today = new Date();
+  const dates = Array.from({ length: 9 }, (_, i) => {
+    const d = new Date(today);
+    d.setUTCDate(d.getUTCDate() + i);
+    return d.toISOString().split("T")[0];
+  });
+
+  // Step 1: collect all unique league NodeIds across all dates
+  const leagueIdPages = await Promise.all(
+    dates.map(date =>
+      fetch(`${CODERE_NAV}?sportHandle=soccer&date=${date}`, { headers: CODERE_HEADERS })
+        .then(r => r.json())
+        .then(countries => countries.flatMap(c => c.Leagues?.map(l => l.NodeId) ?? []))
+        .catch(() => [])
+    )
+  );
+  const leagueIds = [...new Set(leagueIdPages.flat())];
+
+  // Step 2: fetch events for each league in parallel
+  const leagueResults = await Promise.all(
+    leagueIds.map(id =>
+      fetch(`${CODERE_SBS}/${id}/1/GetEventsByLeagueAndMarketId`, { headers: CODERE_HEADERS })
+        .then(r => r.ok ? r.json() : [])
+        .catch(() => [])
+    )
+  );
+
+  // Step 3: dedup by NodeId and adapt
+  const seen = new Set();
+  const allEvents = leagueResults.flat().filter(e => {
+    if (seen.has(e.NodeId)) return false;
+    seen.add(e.NodeId);
+    return true;
+  });
+
+  return allEvents.map(adaptCodereEvent).filter(Boolean);
 }
 
 export async function getLuckiaOdds() {
