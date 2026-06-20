@@ -2,6 +2,7 @@ import { adaptBetplayEvent } from "../adapters/betplayAdapter.js";
 import { adaptStakeEvent } from "../adapters/stakeAdapter.js";
 import { parseWplayDOM } from "../adapters/wplayAdapter.js";
 import { adaptZambaEvent } from "../adapters/zambaAdapter.js";
+import { parseLuckiaDOM } from "../adapters/luckiaAdapter.js";
 import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 chromium.use(stealth());
@@ -154,6 +155,61 @@ export async function getZambaOdds() {
   } while (cursor);
 
   return allNodes.map(adaptZambaEvent).filter(Boolean);
+}
+
+export async function getLuckiaOdds() {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto("https://www.luckia.co/apuestas/futbol/51/?date=sve", {
+      waitUntil: "networkidle",
+      timeout: 30000,
+    });
+    await new Promise(r => setTimeout(r, 3000));
+
+    const events = await page.evaluate(() => {
+      const MONTHS = { ene:1, feb:2, mar:3, abr:4, may:5, jun:6, jul:7, ago:8, sep:9, oct:10, nov:11, dic:12 };
+      const now = new Date();
+
+      function parseDate(text) {
+        const m = text.trim().match(/(\d{1,2})\s+([a-z]+)/i);
+        if (!m) return null;
+        const mon = MONTHS[m[2].toLowerCase()];
+        if (!mon) return null;
+        const year = mon < now.getMonth() + 1 ? now.getFullYear() + 1 : now.getFullYear();
+        return year + "-" + String(mon).padStart(2, "0") + "-" + m[1].padStart(2, "0");
+      }
+
+      const results = [];
+      for (const el of document.querySelectorAll("[data-event-url]")) {
+        const url = el.getAttribute("data-event-url");
+        const teamEls = el.querySelectorAll(".lp-event__team-name-text");
+        if (teamEls.length < 2) continue;
+        const home = teamEls[0].innerText.trim();
+        const away = teamEls[1].innerText.trim();
+
+        const dateEl = el.querySelector(".lp-event__extra-date");
+        const date = dateEl ? parseDate(dateEl.innerText) : null;
+
+        const pick1 = el.querySelector("[data-pick=\"1\"] .lp-event__pick-content");
+        const pickX = el.querySelector("[data-pick=\"X\"] .lp-event__pick-content");
+        const pick2 = el.querySelector("[data-pick=\"2\"] .lp-event__pick-content");
+
+        const parseOdd = e => e ? parseFloat(e.innerText.trim().replace(",", ".")) : null;
+        const local = parseOdd(pick1);
+        const empate = parseOdd(pickX);
+        const visitante = parseOdd(pick2);
+
+        if (!local || !empate || !visitante || !date) continue;
+        results.push({ home, away, date, local, empate, visitante, url });
+      }
+      return results;
+    });
+
+    return parseLuckiaDOM(events);
+  } finally {
+    await browser.close();
+  }
 }
 
 export async function getWplayOdds() {
