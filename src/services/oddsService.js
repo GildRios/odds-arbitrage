@@ -4,6 +4,7 @@ import { parseWplayDOM } from "../adapters/wplayAdapter.js";
 import { adaptZambaEvent } from "../adapters/zambaAdapter.js";
 import { parseLuckiaDOM } from "../adapters/luckiaAdapter.js";
 import { adaptCodereEvent } from "../adapters/codereAdapter.js";
+import { adaptRivaloFixture } from "../adapters/rivaloAdapter.js";
 import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 chromium.use(stealth());
@@ -254,6 +255,31 @@ export async function getLuckiaOdds() {
     });
 
     return parseLuckiaDOM(events);
+  } finally {
+    await browser.close();
+  }
+}
+
+export async function getRivaloOdds() {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+
+    const [response] = await Promise.all([
+      page.waitForResponse(
+        r => r.url().includes("/api/offer/v4/competitions") && r.status() === 200,
+        { timeout: 30000 }
+      ),
+      page.goto("https://www.rivalo.co/es/sportsbook/football", {
+        waitUntil: "domcontentloaded",
+        timeout: 30000,
+      }),
+    ]);
+
+    const data = await response.json();
+    const competitions = data?.enriched ?? [];
+    const fixtures = competitions.flatMap(comp => comp.fixtures ?? []);
+    return fixtures.map(adaptRivaloFixture).filter(Boolean);
   } finally {
     await browser.close();
   }
