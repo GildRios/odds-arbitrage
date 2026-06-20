@@ -1,5 +1,9 @@
 import { adaptBetplayEvent } from "../adapters/betplayAdapter.js";
 import { adaptStakeEvent } from "../adapters/stakeAdapter.js";
+import { parseWplayData } from "../adapters/wplayAdapter.js";
+import { chromium } from "playwright-extra";
+import stealth from "puppeteer-extra-plugin-stealth";
+chromium.use(stealth());
 
 const KAMBI_BASE = "https://us.offering-api.kambicdn.com/offering/v2018/betplay";
 const KAMBI_QS = "?lang=es_CO&market=CO&client_id=200&channel_id=1";
@@ -88,4 +92,26 @@ export async function getStakeOdds() {
   return allEvents
     .map(event => adaptStakeEvent(event))
     .filter(odd => odd !== null);
+}
+
+export async function getWplayOdds() {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    let raw = null;
+    page.on("response", async r => {
+      if (r.url().includes("update_server") && r.status() === 200) {
+        try { raw = await r.text(); } catch {}
+      }
+    });
+    await page.goto("https://apuestas.wplay.co/es/football", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    await new Promise(r => setTimeout(r, 10000));
+    if (!raw) return [];
+    return parseWplayData(JSON.parse(raw));
+  } finally {
+    await browser.close();
+  }
 }
