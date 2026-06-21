@@ -12,17 +12,36 @@ function groupByMatchKey(allOdds) {
   return grouped;
 }
 
-export async function findArbitrageOpportunities(totalStake) {
-  // Fase 1: casas vía Playwright — corren solas para no competir con las llamadas REST masivas de Betsson
-  const [wplayOdds, luckiaOdds, rivaloOdds] = await Promise.all([
-    getWplayOdds(), getLuckiaOdds(), getRivaloOdds(),
-  ]);
+async function safeCall(fn, name) {
+  try { return await fn(); }
+  catch (err) { console.warn(`[${name}] error: ${err.message}`); return []; }
+}
 
-  // Fase 2: casas REST/WS — sin browsers Playwright
-  const [betplayOdds, rushbetOdds, stakeOdds, zambaOdds, codereOdds, betssonOdds, sportiumOdds, bwinOdds] = await Promise.all([
-    getBetplayOdds(), getRushbetOdds(), getStakeOdds(), getZambaOdds(), getCodereOdds(), getBetssonOdds(), getSportiumOdds(), getBwinOdds(),
-  ]);
-  const allOdds = [...betplayOdds, ...rushbetOdds, ...stakeOdds, ...wplayOdds, ...zambaOdds, ...luckiaOdds, ...codereOdds, ...rivaloOdds, ...betssonOdds, ...sportiumOdds, ...bwinOdds];
+export async function findArbitrageOpportunities(totalStake) {
+  // All sources run sequentially so the GC can free each source's raw JSON before the next one loads.
+  // Kambi endpoints (Betplay/Rushbet) return global football data that can be hundreds of MB parsed;
+  // running 8 such sources in parallel was the cause of the OOM crash.
+  const allOdds = [];
+  for (const [fn, name] of [
+    [getBetplayOdds,  "Betplay"],
+    [getRushbetOdds,  "Rushbet"],
+    [getStakeOdds,    "Stake"],
+    [getZambaOdds,    "Zamba"],
+    [getCodereOdds,   "Codere"],
+    [getBetssonOdds,  "Betsson"],
+    [getSportiumOdds, "Sportium"],
+    [getBwinOdds,     "Bwin"],
+    [getWplayOdds,    "Wplay"],
+    [getLuckiaOdds,   "Luckia"],
+    [getRivaloOdds,   "Rivalo"],
+  ]) {
+    console.log(`[${new Date().toISOString()}] [${name}] fetching...`);
+    const odds = await safeCall(fn, name);
+    console.log(`[${new Date().toISOString()}] [${name}] ${odds.length} eventos`);
+    allOdds.push(...odds);
+    // Nudge the GC to collect the raw response objects from this source before the next fetch
+    if (typeof globalThis.gc === "function") globalThis.gc();
+  }
   const groupedOdds = groupByMatchKey(allOdds);
   const opportunities = [];
 

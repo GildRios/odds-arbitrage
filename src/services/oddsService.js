@@ -24,44 +24,11 @@ function kambiBase(client) {
   return `https://us.offering-api.kambicdn.com/offering/v2018/${client}`;
 }
 
-function extractCompetitionPaths(events) {
-  const paths = new Set();
-  events.forEach(e => {
-    const path = e.event?.path ?? [];
-    const level1 = path[1]?.termKey;
-    const level2 = path[2]?.termKey;
-    if (!level1 || level1.startsWith("esports")) return;
-    paths.add(level2 ? `${level1}/${level2}` : level1);
-  });
-  return [...paths];
-}
-
 async function getKambiOdds(client, house) {
   const base = kambiBase(client);
-  const allUrl = `${base}/listView/football/all/all/all/matches.json${KAMBI_QS}`;
-  const aggregateData = await fetch(allUrl).then(r => r.json());
-  const competitionPaths = extractCompetitionPaths(aggregateData.events ?? []);
-
-  const competitionPages = await Promise.all(
-    competitionPaths.map(compPath => {
-      const segments = compPath.split("/").length === 1
-        ? `${compPath}/all/all`
-        : `${compPath}/all`;
-      return fetch(`${base}/listView/football/${segments}/matches.json${KAMBI_QS}`)
-        .then(r => r.json())
-        .then(data => data.events ?? [])
-        .catch(() => []);
-    })
-  );
-
-  const seen = new Set();
-  const allEvents = competitionPages.flat().filter(event => {
-    if (seen.has(event.event?.id)) return false;
-    seen.add(event.event?.id);
-    return true;
-  });
-
-  return allEvents
+  const url = `${base}/listView/football/all/all/all/matches.json${KAMBI_QS}`;
+  const data = await fetch(url).then(r => r.json());
+  return (data.events ?? [])
     .map(event => adaptBetplayEvent(event, house))
     .filter(odd => odd !== null);
 }
@@ -188,14 +155,19 @@ export async function getCodereOdds() {
   );
   const leagueIds = [...new Set(leagueIdPages.flat())];
 
-  // Step 2: fetch events for each league in parallel
-  const leagueResults = await Promise.all(
-    leagueIds.map(id =>
-      fetch(`${CODERE_SBS}/${id}/1/GetEventsByLeagueAndMarketId`, { headers: CODERE_HEADERS })
-        .then(r => r.ok ? r.json() : [])
-        .catch(() => [])
-    )
-  );
+  // Step 2: fetch events for each league in batches of 15 to avoid holding hundreds of responses in memory simultaneously
+  const leagueResults = [];
+  for (let i = 0; i < leagueIds.length; i += 15) {
+    const batch = leagueIds.slice(i, i + 15);
+    const batchResults = await Promise.all(
+      batch.map(id =>
+        fetch(`${CODERE_SBS}/${id}/1/GetEventsByLeagueAndMarketId`, { headers: CODERE_HEADERS })
+          .then(r => r.ok ? r.json() : [])
+          .catch(() => [])
+      )
+    );
+    leagueResults.push(...batchResults);
+  }
 
   // Step 3: dedup by NodeId and adapt
   const seen = new Set();
@@ -212,11 +184,18 @@ export async function getLuckiaOdds() {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
+    await page.route("**/*", route => {
+      if (["image", "media", "font"].includes(route.request().resourceType())) {
+        route.abort();
+      } else {
+        route.continue();
+      }
+    });
     await page.goto("https://www.luckia.co/apuestas/futbol/51/?date=sve", {
       waitUntil: "domcontentloaded",
       timeout: 60000,
     });
-    await new Promise(r => setTimeout(r, 12000));
+    await page.waitForSelector('[data-pick="1"]', { timeout: 30000 });
 
     const events = await page.evaluate(() => {
       const MONTHS = { ene:1, feb:2, mar:3, abr:4, may:5, jun:6, jul:7, ago:8, sep:9, oct:10, nov:11, dic:12 };
@@ -263,7 +242,8 @@ export async function getLuckiaOdds() {
   }
 }
 
-const BETSSON_URL = "https://www.betsson.co/api/sb/v1/events?categoryId=1";
+// MW3W = Match Winner 3-Way (1X2). Filter at API level so each page is ~2 MB instead of ~360 MB.
+const BETSSON_URL = "https://www.betsson.co/api/sb/v1/events?categoryId=1&marketTemplateIds=MW3W";
 const BETSSON_HEADERS = {
   "correlationid": "betsson-odds-fetch",
   "x-obg-channel": "Web",
@@ -288,34 +268,40 @@ const BETSSON_HEADERS = {
   "Referer": "https://www.betsson.co/apuestas-deportivas",
 };
 
-async function fetchBetssonPage(n) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const data = await fetch(`${BETSSON_URL}&pageNumber=${n}`, { headers: BETSSON_HEADERS })
-        .then(r => r.json());
-      if (data.events) return data.events;
-    } catch {}
-    await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-  }
-  return [];
+async function fetchBetssonPage(pageNum) {
+  const url = `${BETSSON_URL}&page=${pageNum}`;
+  const response = await fetch(url, { headers: BETSSON_HEADERS });
+  if (!response.ok) return { adapted: [], totalPages: 1 };
+  const data = await response.json();
+  const events = data.events ?? [];
+  return {
+    adapted: events.map(adaptBetssonEvent).filter(Boolean),
+    totalPages: data.totalPages ?? 1,
+  };
 }
 
 export async function getBetssonOdds() {
-  const first = await fetch(BETSSON_URL, { headers: BETSSON_HEADERS }).then(r => r.json());
-  const totalPages = first.totalPages ?? 1;
-
-  const remaining = await Promise.all(
-    Array.from({ length: totalPages - 1 }, (_, i) => fetchBetssonPage(i + 2))
+  const first = await fetchBetssonPage(1);
+  const results = [...first.adapted];
+  if (first.totalPages <= 1) return results;
+  const rest = await Promise.all(
+    Array.from({ length: first.totalPages - 1 }, (_, i) => fetchBetssonPage(i + 2))
   );
-
-  const allEvents = [...(first.events ?? []), ...remaining.flat()];
-  return allEvents.map(adaptBetssonEvent).filter(Boolean);
+  for (const { adapted } of rest) results.push(...adapted);
+  return results;
 }
 
 export async function getRivaloOdds() {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
+    await page.route("**/*", route => {
+      if (["image", "media", "font", "stylesheet"].includes(route.request().resourceType())) {
+        route.abort();
+      } else {
+        route.continue();
+      }
+    });
 
     const [response] = await Promise.all([
       page.waitForResponse(
@@ -359,16 +345,22 @@ export async function getBwinOdds() {
   const totalCount = first.totalCount ?? 0;
   const totalPages = Math.ceil(totalCount / BWIN_PAGE_SIZE);
 
-  const remaining = await Promise.all(
-    Array.from({ length: totalPages - 1 }, (_, i) => fetchBwinPage((i + 1) * BWIN_PAGE_SIZE))
-  );
-
-  const allFixtures = [...(first.fixtures ?? []), ...remaining.flatMap(p => p.fixtures ?? [])];
-
-  return allFixtures
+  // Process each page immediately so raw responses are GC-eligible before fetching the next
+  const results = (first.fixtures ?? [])
     .filter(f => f.startDate > now)
     .map(adaptBwinFixture)
     .filter(Boolean);
+
+  for (let i = 1; i < totalPages; i++) {
+    const page = await fetchBwinPage(i * BWIN_PAGE_SIZE);
+    results.push(
+      ...(page.fixtures ?? [])
+        .filter(f => f.startDate > now)
+        .map(adaptBwinFixture)
+        .filter(Boolean)
+    );
+  }
+  return results;
 }
 
 const SPORTIUM_WS_URL = "wss://sports.sportium.com.co/api/websocket";
@@ -533,11 +525,18 @@ export async function getWplayOdds() {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
+    await page.route("**/*", route => {
+      if (["image", "media", "font"].includes(route.request().resourceType())) {
+        route.abort();
+      } else {
+        route.continue();
+      }
+    });
     await page.goto("https://apuestas.wplay.co/es/s/FOOT/F%C3%BAtbol", {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
-    await new Promise(r => setTimeout(r, 10000));
+    await page.waitForSelector('[class*="mkt-"]', { timeout: 30000 });
 
     const events = await page.evaluate(() => {
       const MONTHS = { Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12,
