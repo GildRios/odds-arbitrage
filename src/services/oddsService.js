@@ -6,6 +6,8 @@ import { parseLuckiaDOM } from "../adapters/luckiaAdapter.js";
 import { adaptCodereEvent } from "../adapters/codereAdapter.js";
 import { adaptRivaloFixture } from "../adapters/rivaloAdapter.js";
 import { adaptBetssonEvent } from "../adapters/betssonAdapter.js";
+import { adaptSportiumMarket } from "../adapters/sportiumAdapter.js";
+import { adaptBwinFixture } from "../adapters/bwinAdapter.js";
 import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 chromium.use(stealth());
@@ -333,6 +335,198 @@ export async function getRivaloOdds() {
   } finally {
     await browser.close();
   }
+}
+
+const BWIN_ACCESSID = "NzAyNGFhZmYtY2UyNy00NWNjLThmODUtNWYwZDI1OGVmYWU0";
+const BWIN_BASE = "https://www.bwin.co/cds-api/bettingoffer/fixtures";
+const BWIN_QS = `?x-bwin-accessid=${BWIN_ACCESSID}&lang=es-419&country=CO&userCountry=CO` +
+  "&fixtureTypes=Standard&state=PreMatch&offerMapping=Filtered&offerCategories=Gridable" +
+  "&sportIds=4&statisticsModes=None&sortBy=StartDate";
+const BWIN_HEADERS = {
+  "Referer": "https://www.bwin.co/es/sports/futbol-4",
+  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0",
+};
+const BWIN_PAGE_SIZE = 50;
+
+async function fetchBwinPage(skip) {
+  const url = `${BWIN_BASE}${BWIN_QS}&skip=${skip}&take=${BWIN_PAGE_SIZE}`;
+  return fetch(url, { headers: BWIN_HEADERS }).then(r => r.json()).catch(() => ({ fixtures: [] }));
+}
+
+export async function getBwinOdds() {
+  const now = new Date().toISOString();
+  const first = await fetchBwinPage(0);
+  const totalCount = first.totalCount ?? 0;
+  const totalPages = Math.ceil(totalCount / BWIN_PAGE_SIZE);
+
+  const remaining = await Promise.all(
+    Array.from({ length: totalPages - 1 }, (_, i) => fetchBwinPage((i + 1) * BWIN_PAGE_SIZE))
+  );
+
+  const allFixtures = [...(first.fixtures ?? []), ...remaining.flatMap(p => p.fixtures ?? [])];
+
+  return allFixtures
+    .filter(f => f.startDate > now)
+    .map(adaptBwinFixture)
+    .filter(Boolean);
+}
+
+const SPORTIUM_WS_URL = "wss://sports.sportium.com.co/api/websocket";
+const SPORTIUM_WS_HEADERS = {
+  "Origin": "https://sports.sportium.com.co",
+  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0",
+  "Sec-WebSocket-Protocol": "v12.stomp, v11.stomp, v10.stomp",
+};
+
+function parseSportiumStompFrame(raw) {
+  const str = raw.toString();
+  const nullIdx = str.indexOf("\x00");
+  const frameStr = nullIdx >= 0 ? str.substring(0, nullIdx) : str;
+  const lines = frameStr.split("\n");
+  const command = lines[0].trim();
+  const headers = {};
+  let bodyStart = 1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i] === "") { bodyStart = i + 1; break; }
+    const colon = lines[i].indexOf(":");
+    if (colon > 0) headers[lines[i].substring(0, colon)] = lines[i].substring(colon + 1).trim();
+  }
+  const body = lines.slice(bodyStart).join("\n").trim();
+  return { command, headers, body };
+}
+
+function sportiumSub(ws, id, dest, extra = "") {
+  ws.send(`SUBSCRIBE\nid:${id}\nlocale:es\n${extra}destination:${dest}\n\n\x00`);
+}
+
+export async function getSportiumOdds() {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(SPORTIUM_WS_URL, { headers: SPORTIUM_WS_HEADERS });
+    const timeoutId = setTimeout(() => { ws.close(); reject(new Error("Sportium timeout")); }, 90000);
+
+    const eventInfo = {};       // eventId -> { startTime }
+    const marketToEvent = {};   // marketId -> eventId
+    const pendingMarkets = new Set();
+    const results = [];
+    let eventsSubSent = false;
+    let pendingEG = null; // Set of compIds, null until competitions arrive
+
+    function finish() {
+      clearTimeout(timeoutId);
+      ws.close();
+      resolve(results);
+    }
+
+    ws.addEventListener("open", () => {
+      ws.send("CONNECT\nprotocol-version:1.5\naccept-version:1.2,1.1,1.0\nheart-beat:10000,10000\n\n\x00");
+    });
+
+    ws.addEventListener("message", e => {
+      const frame = parseSportiumStompFrame(e.data);
+      if (frame.command === "CONNECTED") {
+        sportiumSub(ws, "rr", "/user/request-response");
+        sportiumSub(ws, "/api/container/soccer-competitions", "/api/container/soccer-competitions");
+        return;
+      }
+      if (frame.command !== "MESSAGE") return;
+
+      const { id, type } = frame.headers;
+
+      if (id === "/api/container/soccer-competitions") {
+        const data = JSON.parse(frame.body);
+        const compIds = data.items.flatMap(c => c.items.map(l => l.id));
+        pendingEG = new Set(compIds);
+        for (const compId of compIds) {
+          const dest = `/api/eventgroups/${compId}-all-match-events`;
+          sportiumSub(ws, dest, dest);
+        }
+        return;
+      }
+
+      if (id && id.startsWith("/api/eventgroups/")) {
+        const compId = id.replace("/api/eventgroups/", "").replace("-all-match-events", "");
+        pendingEG?.delete(compId);
+
+        if (type !== "NOT_AVAILABLE" && frame.body) {
+          try {
+            const data = JSON.parse(frame.body);
+            for (const group of (data.groups ?? [])) {
+              for (const ev of (group.events ?? [])) {
+                if (ev.id && ev.startTime) {
+                  eventInfo[ev.id] = { startTime: ev.startTime };
+                }
+              }
+            }
+          } catch {}
+        }
+
+        if (pendingEG?.size === 0 && !eventsSubSent) {
+          eventsSubSent = true;
+          const allEventIds = Object.keys(eventInfo);
+          if (allEventIds.length === 0) { finish(); return; }
+          const mid = allEventIds.join(";") + ";";
+          const key = allEventIds.join("-");
+          sportiumSub(ws, "/api/events/multi", "/api/events/multi", `mid:${mid}\nkey:${key}\n`);
+        }
+        return;
+      }
+
+      if (id === "/api/events/multi") {
+        if (!frame.body) return;
+        try {
+          const data = JSON.parse(frame.body);
+          for (const [evId, evVal] of Object.entries(data)) {
+            const mLines = evVal.s?.marketLines ?? {};
+            const primaryId = mLines["0"]?.id;
+            if (primaryId) {
+              marketToEvent[primaryId] = evId;
+              pendingMarkets.add(primaryId);
+              sportiumSub(ws, `/api/markets/${primaryId}`, `/api/markets/${primaryId}`);
+            }
+          }
+        } catch {}
+        if (pendingMarkets.size === 0) finish();
+        return;
+      }
+
+      if (id && id.startsWith("/api/markets/")) {
+        const marketId = id.replace("/api/markets/", "");
+        pendingMarkets.delete(marketId);
+
+        if (type !== "NOT_AVAILABLE" && frame.body) {
+          try {
+            const data = JSON.parse(frame.body);
+            if (data.typeCategory === "TEAM_HDA") {
+              const sel = data.selections ?? [];
+              const local = sel.find(s => s.type === "1" && s.status === "ACTIVE" && !s.disabled);
+              const empate = sel.find(s => s.type === "X" && s.status === "ACTIVE" && !s.disabled);
+              const visitante = sel.find(s => s.type === "2" && s.status === "ACTIVE" && !s.disabled);
+              const evId = marketToEvent[marketId];
+              const { startTime } = eventInfo[evId] ?? {};
+              if (local && empate && visitante && startTime) {
+                const adapted = adaptSportiumMarket({
+                  eventId: evId,
+                  startTime,
+                  home: local.name,
+                  away: visitante.name,
+                  local: parseFloat(local.prices?.[0]?.decimalLabel),
+                  empate: parseFloat(empate.prices?.[0]?.decimalLabel),
+                  visitante: parseFloat(visitante.prices?.[0]?.decimalLabel),
+                });
+                if (adapted) results.push(adapted);
+              }
+            }
+          } catch {}
+        }
+
+        if (pendingMarkets.size === 0) finish();
+        return;
+      }
+    });
+
+    ws.addEventListener("error", () => { clearTimeout(timeoutId); ws.close(); reject(new Error("Sportium WS error")); });
+    ws.addEventListener("close", e => { if (e.code !== 1000 && e.code !== 1001) { clearTimeout(timeoutId); reject(new Error(`Sportium WS closed: ${e.code}`)); } });
+  });
 }
 
 export async function getWplayOdds() {

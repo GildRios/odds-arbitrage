@@ -1,4 +1,4 @@
-import { getBetplayOdds, getRushbetOdds, getStakeOdds, getWplayOdds, getZambaOdds, getLuckiaOdds, getCodereOdds, getRivaloOdds, getBetssonOdds } from "./oddsService.js";
+import { getBetplayOdds, getRushbetOdds, getStakeOdds, getWplayOdds, getZambaOdds, getLuckiaOdds, getCodereOdds, getRivaloOdds, getBetssonOdds, getSportiumOdds, getBwinOdds } from "./oddsService.js";
 import { hasArbitrage, calculateStakeDistribution } from "../utils/calculator.js";
 
 function groupByMatchKey(allOdds) {
@@ -18,11 +18,11 @@ export async function findArbitrageOpportunities(totalStake) {
     getWplayOdds(), getLuckiaOdds(), getRivaloOdds(),
   ]);
 
-  // Fase 2: casas REST — Betsson en paralelo completo sin interferir con browsers
-  const [betplayOdds, rushbetOdds, stakeOdds, zambaOdds, codereOdds, betssonOdds] = await Promise.all([
-    getBetplayOdds(), getRushbetOdds(), getStakeOdds(), getZambaOdds(), getCodereOdds(), getBetssonOdds(),
+  // Fase 2: casas REST/WS — sin browsers Playwright
+  const [betplayOdds, rushbetOdds, stakeOdds, zambaOdds, codereOdds, betssonOdds, sportiumOdds, bwinOdds] = await Promise.all([
+    getBetplayOdds(), getRushbetOdds(), getStakeOdds(), getZambaOdds(), getCodereOdds(), getBetssonOdds(), getSportiumOdds(), getBwinOdds(),
   ]);
-  const allOdds = [...betplayOdds, ...rushbetOdds, ...stakeOdds, ...wplayOdds, ...zambaOdds, ...luckiaOdds, ...codereOdds, ...rivaloOdds, ...betssonOdds];
+  const allOdds = [...betplayOdds, ...rushbetOdds, ...stakeOdds, ...wplayOdds, ...zambaOdds, ...luckiaOdds, ...codereOdds, ...rivaloOdds, ...betssonOdds, ...sportiumOdds, ...bwinOdds];
   const groupedOdds = groupByMatchKey(allOdds);
   const opportunities = [];
 

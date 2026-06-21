@@ -8,10 +8,10 @@
 
 ---
 
-## Estado actual (2026-06-20)
+## Estado actual (2026-06-21)
 
-**9 casas implementadas y funcionando:**
-Betplay · Rushbet · Stake · Wplay · Zamba · Luckia · Codere · Rivalo · Betsson
+**11 casas implementadas y funcionando:**
+Betplay · Rushbet · Stake · Wplay · Zamba · Luckia · Codere · Rivalo · Betsson · Sportium · Bwin
 
 Todas integradas en `Promise.all` en `arbitrageService.js`. El motor de arbitraje (`calculator.js`) está completo. El sistema detecta oportunidades reales cuando las cuotas lo permiten.
 
@@ -403,6 +403,111 @@ Referer: https://www.betsson.co/apuestas-deportivas
 
 ---
 
+### Bwin (`src/adapters/bwinAdapter.js`)
+**Plataforma:** CDS API (propia)
+**Método:** REST fetch directo — paginación con `skip/take`
+
+**Endpoint con paginación:**
+```
+GET https://www.bwin.co/cds-api/bettingoffer/fixtures
+    ?x-bwin-accessid=NzAyNGFhZmYtY2UyNy00NWNjLThmODUtNWYwZDI1OGVmYWU0
+    &lang=es-419&country=CO&userCountry=CO
+    &fixtureTypes=Standard&state=PreMatch
+    &offerMapping=Filtered&offerCategories=Gridable
+    &sportIds=4&statisticsModes=None&sortBy=StartDate
+    &skip=0&take=50
+```
+
+**Access ID:** `NzAyNGFhZmYtY2UyNy00NWNjLThmODUtNWYwZDI1OGVmYWU0` → base64 de `7024aaff-ce27-45cc-8f85-5f0d258efae4`. Es estático, no requiere sesión.
+
+**Headers:**
+```
+Referer: https://www.bwin.co/es/sports/futbol-4
+User-Agent: Mozilla/5.0 ...Chrome/120...
+```
+
+**Flujo:** Primera página trae `{ fixtures, totalCount }`. Las páginas restantes se piden en paralelo con `skip` incrementado de 50 en 50. Filtro cliente-side: `startDate > now` (descarta eventos en vivo, que `state=PreMatch` a veces incluye).
+
+**Estructura del fixture:**
+```js
+{
+  id: "2:7812214",
+  sourceId: 7812214,
+  startDate: "2026-06-21T02:30:00Z",
+  participants: [
+    { name: { value: "Ecuador" } },   // índice 0 = local
+    { name: { value: "Curaçao" } },   // índice 1 = visitante
+  ],
+  optionMarkets: [{
+    name: { value: "Resultado del partido" },   // ← mercado 1X2
+    options: [
+      { name: { value: "Ecuador" }, sourceName: { value: "1" }, status: "Visible", price: { odds: 1.19 } },
+      { name: { value: "X" },       sourceName: undefined,      status: "Visible", price: { odds: 5.75 } },
+      { name: { value: "Curaçao" }, sourceName: { value: "2" }, status: "Visible", price: { odds: 12.0 } },
+    ]
+  }]
+}
+```
+
+**Lógica del adaptador:**
+- Mercado 1X2: `name.value === "Resultado del partido"`
+- Local: `sourceName?.value === "1"`
+- Empate: `name.value === "X"` (sourceName es undefined para la X)
+- Visitante: `sourceName?.value === "2"`
+- Cuotas: `price.odds` — decimales directos
+- **Solo incluye opciones con `status === "Visible"`**
+
+**Link directo:** `https://www.bwin.co/es/sports/eventos/{home-slug}-{away-slug}-{id}`
+(ejemplo: `https://www.bwin.co/es/sports/eventos/ecuador-curazao-2:7812214`)
+
+---
+
+### Sportium (`src/adapters/sportiumAdapter.js`)
+**Plataforma:** DBX (propia de Sportium/Cirsa)
+**Método:** WebSocket STOMP nativo (Node.js 21+ `global.WebSocket`)
+
+**URL WebSocket:**
+```
+wss://sports.sportium.com.co/api/websocket
+```
+
+**Headers obligatorios del WebSocket upgrade:**
+```
+Sec-WebSocket-Protocol: v12.stomp, v11.stomp, v10.stomp
+Origin: https://sports.sportium.com.co
+```
+
+**Protocolo STOMP — flujo en 4 fases:**
+
+1. **CONNECT** con `protocol-version:1.5` → esperar `CONNECTED`
+2. **SUBSCRIBE** a `/user/request-response` (ID `rr`) — todas las respuestas llegan aquí con header `id` = subscription ID original
+3. **SUBSCRIBE** a `/api/container/soccer-competitions` → recibe JSON con `items[]` (países) → `items[].items[]` (ligas) con sus `id` (ej. `soccer-en-sb_type_19157`)
+4. **SUBSCRIBE** a `/api/eventgroups/{compId}-all-match-events` para CADA liga → recibe `{groups:[{events:[{id, name, startTime}]}]}`
+5. Con todos los event IDs, **SUBSCRIBE** a `/api/events/multi` con headers `mid:{ids;};` y `key:{ids-}` → recibe `{eventId: {s: {marketLines: {"0": {id: marketId}}}}}` (tipo MULTI = ~800KB)
+6. **SUBSCRIBE** a `/api/markets/{marketId}` para cada `marketLines["0"]` (mercado primario = 1X2)
+
+**Estructura del mercado 1X2:**
+```js
+{
+  typeCategory: "TEAM_HDA",   // ← filtrar solo estos
+  selections: [
+    { type: "1", name: "Cork City", status: "ACTIVE", disabled: false, prices: [{ decimalLabel: "1.65" }] },
+    { type: "X", name: "X",         status: "ACTIVE", disabled: false, prices: [{ decimalLabel: "3.90" }] },
+    { type: "2", name: "Bray",      status: "ACTIVE", disabled: false, prices: [{ decimalLabel: "4.75" }] },
+  ]
+}
+```
+
+**Cuotas:** `parseFloat(selection.prices[0].decimalLabel)` — decimales como string.
+**Fecha:** `startTime.split("T")[0]` — ISO UTC.
+**Link directo:** `https://sports.sportium.com.co/sports/soccer/events/{eventId}`
+
+**Rendimiento:** ~40-50 segundos. 61 competencias, ~290 eventos. No usa Playwright → va en **Fase 2**.
+
+**Implementado en:** `getSportiumOdds()` en `oddsService.js` — cliente STOMP completo sin librerías externas.
+
+---
+
 ### Wplay (`src/adapters/wplayAdapter.js`)
 **Plataforma:** PlayTech  
 **Método:** Playwright headless + DOM scraping (Cloudflare Turnstile)  
@@ -438,6 +543,8 @@ src/services/oddsService.js
   ├── getStakeOdds()
   ├── getZambaOdds()
   ├── getCodereOdds()
+  ├── getBwinOdds()                 → REST paginado (CDS API)
+  ├── getSportiumOdds()             → WebSocket STOMP nativo
   ├── getLuckiaOdds()               → Playwright
   ├── getRivaloOdds()               → Playwright
   ├── getWplayOdds()                → Playwright
@@ -446,7 +553,7 @@ src/services/oddsService.js
 src/services/arbitrageService.js
   └── findArbitrageOpportunities(totalStake)
         → Fase 1: Promise.all(Wplay, Luckia, Rivalo)   ← Playwright sin interferencia REST
-        → Fase 2: Promise.all(Betplay, Rushbet, Stake, Zamba, Codere, Betsson)
+        → Fase 2: Promise.all(Betplay, Rushbet, Stake, Zamba, Codere, Betsson, Sportium, Bwin)
         → groupByMatchKey
         → hasArbitrage → calculateStakeDistribution
 
@@ -466,13 +573,6 @@ src/utils/calculator.js
 
 ---
 
-## Casas pendientes
-
-| Casa | Plataforma | Notas |
-|---|---|---|
-| **Sportium** | PlayTech (Cirsa) | No explorado |
-| **Bwin** | Propia | No explorado |
-
 ---
 
 ## Gotchas y reglas importantes
@@ -489,3 +589,5 @@ src/utils/calculator.js
 - **No correr todos los browsers Playwright en paralelo con Betsson:** Betsson hace ~180 requests al mismo tiempo y satura la red, causando que Luckia y Rivalo no carguen. Por eso existe la ejecución en dos fases.
 - **Luckia es sensible a la carga del sistema:** cuando otros browsers corren simultáneamente, el DOM puede no hidratarse en 12s. Si da 0 eventos de forma recurrente, considerar aumentar la espera.
 - **Betsson rate-limit:** si muchas páginas consecutivas fallan y el total baja a ~36, el servidor está rate-limitando. `fetchBetssonPage` reintenta 3 veces con backoff; si aún falla, esperar unos minutos antes de volver a correr.
+- **Sportium WebSocket:** requiere `Sec-WebSocket-Protocol: v12.stomp, v11.stomp, v10.stomp` en el upgrade; sin ese header el servidor responde con ERROR frame. Usa `global.WebSocket` de Node.js 21+ (no necesita librería `ws`).
+- **Sportium events/multi:** el body de respuesta puede llegar a ~800KB (tipo MULTI). El servidor acepta todos los event IDs concatenados en el header `mid` sin problema (probado con ~290 IDs).
