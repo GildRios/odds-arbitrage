@@ -31,17 +31,34 @@ export async function findArbitrageOpportunities(totalStake) {
 
     if (oddsArray.length < 2) continue;
 
-    const bestLocal = Math.max(...oddsArray.map(o => o.odds.local));
-    const bestDraw = Math.max(...oddsArray.map(o => o.odds.empate));
-    const bestAway = Math.max(...oddsArray.map(o => o.odds.visitante));
+    const bestLocalEntry    = oddsArray.reduce((b, o) => o.odds.local    > b.odds.local    ? o : b);
+    const bestDrawEntry     = oddsArray.reduce((b, o) => o.odds.empate   > b.odds.empate   ? o : b);
+    const bestVisitanteEntry = oddsArray.reduce((b, o) => o.odds.visitante > b.odds.visitante ? o : b);
+
+    const bestLocal = bestLocalEntry.odds.local;
+    const bestDraw  = bestDrawEntry.odds.empate;
+    const bestAway  = bestVisitanteEntry.odds.visitante;
 
     if (hasArbitrage(bestLocal, bestDraw, bestAway)) {
-      const distribution = calculateStakeDistribution(bestLocal, bestDraw, bestAway, totalStake);
-      opportunities.push({ matchKey, bestLocal, bestDraw, bestAway, ...distribution });
+      const { localStake, drawStake, awayStake, guaranteedValue } =
+        calculateStakeDistribution(bestLocal, bestDraw, bestAway, totalStake);
+
+      opportunities.push({
+        match:       bestLocalEntry.match,
+        date:        bestLocalEntry.date,
+        profitPct:   +((guaranteedValue / totalStake) * 100).toFixed(2),
+        guaranteed:  Math.round(guaranteedValue),
+        total:       totalStake,
+        bets: [
+          { outcome: "local",     house: bestLocalEntry.house,     odds: bestLocal, stake: Math.round(localStake), link: bestLocalEntry.link },
+          { outcome: "empate",    house: bestDrawEntry.house,      odds: bestDraw,  stake: Math.round(drawStake),  link: bestDrawEntry.link },
+          { outcome: "visitante", house: bestVisitanteEntry.house, odds: bestAway,  stake: Math.round(awayStake),  link: bestVisitanteEntry.link },
+        ],
+      });
     }
   }
 
-  return opportunities;
+  return opportunities.sort((a, b) => b.profitPct - a.profitPct);
 }
 
 export default { findArbitrageOpportunities };
