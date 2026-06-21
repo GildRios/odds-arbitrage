@@ -13,8 +13,14 @@ function groupByMatchKey(allOdds) {
 }
 
 export async function findArbitrageOpportunities(totalStake) {
-  const [betplayOdds, rushbetOdds, stakeOdds, wplayOdds, zambaOdds, luckiaOdds, codereOdds, rivaloOdds, betssonOdds] = await Promise.all([
-    getBetplayOdds(), getRushbetOdds(), getStakeOdds(), getWplayOdds(), getZambaOdds(), getLuckiaOdds(), getCodereOdds(), getRivaloOdds(), getBetssonOdds(),
+  // Fase 1: casas vía Playwright — corren solas para no competir con las llamadas REST masivas de Betsson
+  const [wplayOdds, luckiaOdds, rivaloOdds] = await Promise.all([
+    getWplayOdds(), getLuckiaOdds(), getRivaloOdds(),
+  ]);
+
+  // Fase 2: casas REST — Betsson en paralelo completo sin interferir con browsers
+  const [betplayOdds, rushbetOdds, stakeOdds, zambaOdds, codereOdds, betssonOdds] = await Promise.all([
+    getBetplayOdds(), getRushbetOdds(), getStakeOdds(), getZambaOdds(), getCodereOdds(), getBetssonOdds(),
   ]);
   const allOdds = [...betplayOdds, ...rushbetOdds, ...stakeOdds, ...wplayOdds, ...zambaOdds, ...luckiaOdds, ...codereOdds, ...rivaloOdds, ...betssonOdds];
   const groupedOdds = groupByMatchKey(allOdds);

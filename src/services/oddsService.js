@@ -211,10 +211,10 @@ export async function getLuckiaOdds() {
   try {
     const page = await browser.newPage();
     await page.goto("https://www.luckia.co/apuestas/futbol/51/?date=sve", {
-      waitUntil: "networkidle",
-      timeout: 30000,
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
     });
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 12000));
 
     const events = await page.evaluate(() => {
       const MONTHS = { ene:1, feb:2, mar:3, abr:4, may:5, jun:6, jul:7, ago:8, sep:9, oct:10, nov:11, dic:12 };
@@ -286,21 +286,27 @@ const BETSSON_HEADERS = {
   "Referer": "https://www.betsson.co/apuestas-deportivas",
 };
 
+async function fetchBetssonPage(n) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const data = await fetch(`${BETSSON_URL}&pageNumber=${n}`, { headers: BETSSON_HEADERS })
+        .then(r => r.json());
+      if (data.events) return data.events;
+    } catch {}
+    await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+  }
+  return [];
+}
+
 export async function getBetssonOdds() {
   const first = await fetch(BETSSON_URL, { headers: BETSSON_HEADERS }).then(r => r.json());
   const totalPages = first.totalPages ?? 1;
-  const firstEvents = first.events ?? [];
 
   const remaining = await Promise.all(
-    Array.from({ length: totalPages - 1 }, (_, i) =>
-      fetch(`${BETSSON_URL}&pageNumber=${i + 2}`, { headers: BETSSON_HEADERS })
-        .then(r => r.json())
-        .then(d => d.events ?? [])
-        .catch(() => [])
-    )
+    Array.from({ length: totalPages - 1 }, (_, i) => fetchBetssonPage(i + 2))
   );
 
-  const allEvents = [...firstEvents, ...remaining.flat()];
+  const allEvents = [...(first.events ?? []), ...remaining.flat()];
   return allEvents.map(adaptBetssonEvent).filter(Boolean);
 }
 
@@ -312,11 +318,11 @@ export async function getRivaloOdds() {
     const [response] = await Promise.all([
       page.waitForResponse(
         r => r.url().includes("/api/offer/v4/competitions") && r.status() === 200,
-        { timeout: 30000 }
+        { timeout: 60000 }
       ),
       page.goto("https://www.rivalo.co/es/sportsbook/football", {
         waitUntil: "domcontentloaded",
-        timeout: 30000,
+        timeout: 60000,
       }),
     ]);
 
